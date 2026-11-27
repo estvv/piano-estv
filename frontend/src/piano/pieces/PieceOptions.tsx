@@ -13,8 +13,8 @@ import { useObservable } from '../../lib/store';
 import { TrackList } from './PlayerControls';
 
 export type HandChoice = 'both' | Hand;
-// Where the player writes the numbers.
-export interface NumbersShown { notes: boolean; keys: boolean }
+// Where the player writes the numbers, and whether keys carry their names.
+export interface NumbersShown { notes: boolean; keys: boolean; names: boolean }
 
 export const RATES = [0.5, 0.75, 1, 1.25];
 
@@ -119,6 +119,10 @@ export function PieceOptions({ mode, level, rate, hand, bothHands, numbered, tra
                   <Toggle checked={numbered.notes} onChange={(notes) => onNumbered({ notes })} label="les notes qui tombent" />
                   <Toggle checked={numbered.keys} onChange={(keys) => onNumbered({ keys })} label="les touches du clavier" />
                 </div>
+              </div>
+              <div>
+                <Toggle checked={numbered.names} onChange={(names) => onNumbered({ names })} label="Noms des notes sur les touches" />
+                {numbered.names && numbered.keys && <p className="mt-1 text-xs text-neutral-400">Cachés tant que les chiffres sont sur les touches.</p>}
               </div>
               {lyrics !== null && <Toggle checked={lyrics} onChange={onLyrics} label="Paroles au-dessus des notes" />}
               {voice && (

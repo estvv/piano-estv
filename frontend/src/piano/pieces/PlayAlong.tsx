@@ -148,9 +148,9 @@ export function PlayAlong({ piece, labels, nav, autoPlay, fullscreen, onEdit, on
 
   // Where numbers are written: on the notes, on the keys (once one switch for both).
   const [numbersShown, setNumbersShown] = useState<NumbersShown>(() => {
-    const saved = readJson<{ on?: boolean; notes?: boolean; keys?: boolean }>(NUMBERS_KEY, {});
+    const saved = readJson<{ on?: boolean; notes?: boolean; keys?: boolean; names?: boolean }>(NUMBERS_KEY, {});
     const on = saved.on ?? true;
-    return { notes: saved.notes ?? on, keys: saved.keys ?? on };
+    return { notes: saved.notes ?? on, keys: saved.keys ?? on, names: saved.names ?? true };
   });
   const numbersOn = numbersShown.notes;
   const [lyricsOn, setLyricsOn] = useState(() => readJson(LYRICS_KEY, { on: true }).on);
@@ -653,7 +653,7 @@ export function PlayAlong({ piece, labels, nav, autoPlay, fullscreen, onEdit, on
             </div>}
             <div className={`px-2 sm:px-4 ${big ? 'border-t border-neutral-100 pt-2' : ''} ${short ? 'pb-2' : ''}`}>
               <div className="relative">
-                <PianoKeyboard from={from} to={to} labels={named && !numbersShown.keys ? labels : 'none'} marks={marks} stickers={numbersShown.keys ? stickers : undefined} height={keyboardHeight} />
+                <PianoKeyboard from={from} to={to} labels={named && numbersShown.names && !numbersShown.keys ? labels : 'none'} marks={marks} stickers={numbersShown.keys ? stickers : undefined} height={keyboardHeight} />
                 {!big && <KeyLight canvas={keyLight} />}
               </div>
             </div>
