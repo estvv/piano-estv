@@ -1,0 +1,70 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  # On the VPS: builds, saves the database, rehearses its update on a copy,
+  # switches, checks, and goes back if anything fails (deploy/deploy.sh).
+  # Off until docs/DEPLOY.md is done: it sets DEPLOY_ENABLED.
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - name: Deploy this commit
+        env:
+          HOST: ${{ secrets.VPS_IP }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          SSH_USER: ${{ vars.VPS_USER }}
+          SSH_PORT: ${{ vars.VPS_PORT || '22' }}
+        run: |
+          for name in HOST SSH_KEY KNOWN_HOSTS SSH_USER; do
+            [ -n "${!name}" ] || { echo "::error::$name manque : voir docs/DEPLOY.md"; exit 1; }
+          done
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -p "$SSH_PORT" \
+            -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 \
+            "$SSH_USER@$HOST" "$GITHUB_SHA"
+
+      - name: Check the site
+        if: vars.SITE_URL != ''
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          for _ in $(seq 1 10); do
+            body=$(curl -fsS --max-time 10 "$SITE_URL/health" || true)
+            echo "$body"
+            case "$body" in *"$GITHUB_SHA"*) exit 0 ;; esac
+            sleep 5
+          done
+          echo "::warning::$SITE_URL ne répond pas avec ce commit (plus récent, ou cache ?)"

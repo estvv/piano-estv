@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --color-page: #fafafa;
+
+  /* The two hands: set by lib/appearance.ts. */
+  --color-hand-l: #ef4444; --color-hand-l-on: #fff; --color-hand-l-soft: #fdecec; --color-hand-l-pale: #fac7c7; --color-hand-l-deep: #f7a2a2; --color-hand-l-ink: #942a2a;
+  --color-hand-l-key: #f9b4b4; --color-hand-l-key-ink: #942a2a; --color-hand-l-bright: #f58f8f;
+  --color-hand-r: #3b82f6; --color-hand-r-on: #fff; --color-hand-r-soft: #ebf3fe; --color-hand-r-pale: #c4dafc; --color-hand-r-deep: #9dc1fb; --color-hand-r-ink: #255199;
+  --color-hand-r-key: #b1cdfb; --color-hand-r-key-ink: #255199; --color-hand-r-bright: #89b4fa;
+
+  /* The piano keys. */
+  --color-key-white: #fff; --color-key-black: #262626; --color-key-line: #e5e5e5; --color-key-down: #e5e5e5; --color-key-name: #8a8a8a;
+}
+
+/* Same conditions as lib/useMedia.ts. */
+@custom-variant phone (@media (width < 48rem) or (height < 32rem));
+@custom-variant short (@media (height < 32rem));
+@custom-variant compact (@media (width < 80rem) or (height < 32rem));
+
+body {
+  background: var(--color-page);
+  @apply text-neutral-900 antialiased;
+}
+
+/* Visible keyboard focus everywhere, mouse clicks stay clean. */
+:focus-visible {
+  outline: 2px solid var(--color-neutral-900);
+  outline-offset: 2px;
+}
+
+/* Two quick taps are two taps, not a zoom. */
+button, a, label, select { touch-action: manipulation; }
+
+/* Below 16px, phones zoom on a field when it gets the focus. */
+@media (pointer: coarse) {
+  input, select, textarea { font-size: 16px; }
+  .cm-editor { font-size: 16px !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+
+/* Lesson / card Markdown. */
+.md { overflow-wrap: break-word; }
+.md > * + * { margin-top: 0.85rem; }
+.md h1 { @apply text-2xl font-bold; }
+.md h2 { @apply text-xl font-semibold mt-8; }
+.md h3 { @apply text-lg font-semibold mt-6; }
+.md p, .md li { @apply leading-relaxed text-neutral-700; }
+.md strong { @apply text-neutral-900 font-semibold; }
+.md ul { @apply list-disc pl-6 space-y-1; }
+.md ol { @apply list-decimal pl-6 space-y-1; }
+.md a { @apply underline underline-offset-2; }
+.md code { @apply rounded bg-neutral-100 px-1 py-0.5 text-[0.9em]; }
+.md blockquote { @apply rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3; }
+.md blockquote p { @apply text-neutral-700; }
+.md table { @apply w-full border-collapse text-sm; }
+.md th, .md td { @apply border border-neutral-200 px-3 py-1.5 text-left; }
+.md th { @apply bg-neutral-50 font-semibold; }
+
+/* Code colours, in the editor and in lessons (@lezer/highlight classes). */
+.md pre code { background: none; padding: 0; font-size: inherit; }
+.tok-keyword, .tok-operatorKeyword { color: #7c3aed; }
+.tok-string, .tok-string2 { color: #047857; }
+.tok-number, .tok-bool, .tok-atom, .tok-literal { color: #b45309; }
+.tok-comment { color: #8a8a8a; font-style: italic; }
+.tok-typeName, .tok-className, .tok-namespace { color: #0f766e; }
+.tok-propertyName { color: #1d4ed8; }
+.tok-variableName.tok-definition { color: #171717; font-weight: 600; }
+.tok-meta, .tok-punctuation, .tok-operator { color: #525252; }
+.tok-invalid { color: #dc2626; }

@@ -1,0 +1,71 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: piano-backend-estv
+    expose:
+      - "8080"
+    networks:
+      - caddy_net
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - APP_COMMIT=${APP_COMMIT:-}
+      - PORT=8080
+      - DB_PATH=/app/data/piano.db
+      - COOKIE_SECURE=${COOKIE_SECURE:-1}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - MISTRAL_VISION_MODEL=${MISTRAL_VISION_MODEL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: '0.75'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: piano-frontend-estv
+    expose:
+      - "80"
+    networks:
+      - caddy_net
+    depends_on:
+      - backend
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          memory: 48M
+          cpus: '0.15'
+
+networks:
+  caddy_net:
+    external: true
