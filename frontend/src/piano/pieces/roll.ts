@@ -1,4 +1,4 @@
-import type { Score, ScoreNote, ScorePart } from '@piano/shared';
+import { stepsHeld, type Score, type ScoreNote, type ScorePart } from '@piano/shared';
 import type { FromPiece } from './importedScore';
 import { addNotes, HANDS, partOf, removeNote, withKeys } from './score';
 
@@ -56,6 +56,59 @@ export function spill(before: Score, after: Score, index: number): Score {
     out = addNotes(out, parts[there.index].label, [{ ...n, step: there.step }]);
   }
   return out;
+}
+
+// --- Several notes at once -----------------------------------------------------------
+
+// Notes copied, in columns from the first one, held as long as they were.
+export interface Clip {
+  notes: { at: number; note: ScoreNote }[];
+}
+
+const sameNote = (a: ScoreNote, b: ScoreNote) => a.hand === b.hand && a.step === b.step && a.midi === b.midi;
+
+// Those still there after a change (an undo, a note removed).
+export function stillThere(score: Score, picked: Placed[]): Placed[] {
+  const parts = sheetOf(score);
+  const out = picked.filter((p) => parts[p.index]?.notes.some((n) => sameNote(n, p.note)));
+  return out.length === picked.length ? picked : out;
+}
+
+export function copyNotes(score: Score, picked: Placed[]): Clip | null {
+  if (!picked.length) return null;
+  const parts = sheetOf(score);
+  const offsets = offsetsOf(parts, score.division);
+  const start = Math.min(...picked.map((p) => offsets[p.index] + p.note.step));
+  return {
+    notes: picked.map(({ index, note }) => ({
+      at: offsets[index] + note.step - start,
+      note: { ...note, length: stepsHeld(parts[index], score.division, note) },
+    })),
+  };
+}
+
+export function removeNotes(score: Score, picked: Placed[]): Score {
+  const parts = sheetOf(score);
+  return picked.reduce((s, { index, note }) => (parts[index] ? removeNote(s, parts[index].label, note) : s), score);
+}
+
+// Where the notes of a clip land, its first one at `at` (columns from the start
+// of the piece). Past the end: in the last part, or left out when it cannot grow.
+export function clipPlaces(score: Score, clip: Clip, at: number, extend: boolean): Placed[] {
+  const parts = sheetOf(score);
+  const offsets = offsetsOf(parts, score.division);
+  const end = offsets[parts.length];
+  return clip.notes
+    .filter((n) => extend || at + n.at < end)
+    .map((n) => {
+      const there = locate(offsets, at + n.at);
+      return { index: there.index, note: { ...n.note, step: there.step } };
+    });
+}
+
+export function pasteNotes(score: Score, places: Placed[]): Score {
+  const parts = sheetOf(score);
+  return places.reduce((s, { index, note }) => addNotes(s, parts[index].label, [note]), score);
 }
 
 // --- Where a part starts ------------------------------------------------------------

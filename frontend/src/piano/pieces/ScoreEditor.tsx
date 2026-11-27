@@ -22,7 +22,7 @@ import { LabelInput, Small } from './Numbers';
 import { handName } from './numbers';
 import { movedLyrics } from './lyrics';
 import { DifficultyPicker, FolderSelect } from './pieceFields';
-import { edgeRange, locate, moveEdge, moveNote, offsetsOf, sheetOf, spill, type Placed } from './roll';
+import { clipPlaces, copyNotes, edgeRange, locate, moveEdge, moveNote, offsetsOf, pasteNotes, removeNotes, sheetOf, spill, stillThere, type Clip, type Placed } from './roll';
 import { OrderChips } from './OrderChips';
 import { otherHand, RollEditor, samePlace } from './RollEditor';
 import { RunPanel } from './RunPanel';
@@ -119,6 +119,11 @@ export function ScoreEditor({ piece, from: given, firstStep, onSaved, onClose }:
   const [held, setHeld] = useState(1);
   const [metronome, setMetronome] = useState(true);
   const [picked, setPicked] = useState<Placed | null>(null);
+  // Several notes: picked with a box, copied, and being pasted.
+  const [selecting, setSelecting] = useState(false);
+  const [chosen, setChosen] = useState<Placed[]>([]);
+  const [clip, setClip] = useState<Clip | null>(null);
+  const [pasting, setPasting] = useState(false);
   const [placing, setPlacing] = useState<Placing | null>(() => placingOf(given?.toPlace));
   const [importing, setImporting] = useState(false);
   const [title, setTitle] = useState(given?.title ?? '');
@@ -225,13 +230,55 @@ export function ScoreEditor({ piece, from: given, firstStep, onSaved, onClose }:
     if (sheet[index]) edit((s) => removeNote(s, sheet[index].label, note));
   };
 
+  const selection = useMemo(() => stillThere(score, chosen), [score, chosen]);
+  const copySelection = () => {
+    const c = copyNotes(score, selection);
+    if (c) setClip(c);
+  };
+  const removeSelection = () => {
+    if (!selection.length) return;
+    edit((s) => removeNotes(s, selection));
+    setChosen([]);
+  };
+  const startPaste = () => {
+    if (!clip) return;
+    preview.stop();
+    setPicked(null);
+    setPasting(true);
+  };
+  const pasteAt = (at: number) => {
+    if (!clip) return;
+    const places = clipPlaces(score, clip, at, structure);
+    setPasting(false);
+    if (!places.length) return setError('Rien à coller ici : c’est après la fin du morceau.');
+    edit((s) => pasteNotes(s, places));
+    // Kept picked: easy to take back or move again.
+    setChosen(places);
+  };
+  const selectAll = () => {
+    setPicked(null);
+    setChosen(sheet.flatMap((p, index) => p.notes.map((note) => ({ index, note }))));
+  };
+
   // Delete: the note picked. H: its other hand. Escape: no note picked, or stop recording.
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || dialog || writing || importing) return;
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === 'z') setHistory(e.shiftKey ? redo : undo);
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && picked) {
+      const k = e.key.toLowerCase();
+      const several = step === 'piece';
+      if (mod && k === 'z') setHistory(e.shiftKey ? redo : undo);
+      else if (several && mod && k === 'c' && selection.length) copySelection();
+      else if (several && mod && k === 'x' && selection.length) {
+        copySelection();
+        removeSelection();
+      } else if (several && mod && k === 'v' && clip) startPaste();
+      else if (several && mod && k === 'a') selectAll();
+      else if (several && (e.key === 'Delete' || e.key === 'Backspace') && selection.length) removeSelection();
+      else if (e.key === 'Escape' && (pasting || selection.length)) {
+        if (pasting) setPasting(false);
+        else setChosen([]);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && picked) {
         deleteNote(picked);
       } else if (!mod && e.code === 'KeyH' && picked && sheet[picked.index]) changeNote(picked, { ...picked, note: { ...picked.note, hand: otherHand(picked.note.hand) } });
       else if (e.key === 'Escape') {
@@ -409,6 +456,10 @@ export function ScoreEditor({ piece, from: given, firstStep, onSaved, onClose }:
                 <Small onClick={() => moveCursor(length)} title="Avancer la ligne : un silence">↑ Silence</Small>
               </span>
             )}
+            <Switch on={selecting} label="Sélection" title="Glisser pour entourer des notes, puis les copier, couper ou supprimer. Maj+glisser marche aussi sans l’allumer." onChange={(on) => {
+              setSelecting(on);
+              if (!on) setChosen([]);
+            }} />
             <label className="flex items-center gap-1.5 text-xs text-neutral-500" title="Durée des notes ajoutées">
               Durée
               <select value={held} onChange={(e) => setHeld(Number(e.target.value))} className="rounded-lg bg-transparent py-1.5 text-neutral-900 focus:outline-none">
@@ -537,7 +588,30 @@ export function ScoreEditor({ piece, from: given, firstStep, onSaved, onClose }:
           )}
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col border-t border-neutral-100 bg-white pl-11 pr-11">
+        <div className="relative flex min-h-0 flex-1 flex-col border-t border-neutral-100 bg-white pl-11 pr-11">
+          {(selection.length > 0 || clip || pasting) && (
+            <div className="absolute left-1/2 top-2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-xl bg-white px-1.5 py-1 text-xs shadow-lg ring-1 ring-neutral-200">
+              {pasting ? (
+                <>
+                  <span className="px-2 text-neutral-500">Clique où coller {clip!.notes.length} note{clip!.notes.length > 1 ? 's' : ''}</span>
+                  <Small onClick={() => setPasting(false)} title="Échap">Annuler</Small>
+                </>
+              ) : (
+                <>
+                  {selection.length > 0 && (
+                    <>
+                      <span className="px-2 font-semibold text-neutral-900">{selection.length} note{selection.length > 1 ? 's' : ''}</span>
+                      <Small onClick={copySelection} title="Ctrl+C">Copier</Small>
+                      <Small onClick={() => { copySelection(); removeSelection(); }} title="Ctrl+X">Couper</Small>
+                      <Small onClick={removeSelection} title="Suppr">Supprimer</Small>
+                    </>
+                  )}
+                  {clip && <Small onClick={startPaste} title={`Ctrl+V : ${clip.notes.length} note${clip.notes.length > 1 ? 's' : ''}`}>Coller</Small>}
+                  {selection.length > 0 && <Small onClick={() => setChosen([])} title="Échap">✕</Small>}
+                </>
+              )}
+            </div>
+          )}
           <RollEditor
             parts={sheet}
             division={score.division}
@@ -550,6 +624,14 @@ export function ScoreEditor({ piece, from: given, firstStep, onSaved, onClose }:
             playhead={playhead}
             picked={picked}
             shown={shown}
+            selecting={selecting}
+            selection={selection}
+            pasting={pasting && clip ? (at) => clipPlaces(score, clip, at, structure) : null}
+            onSelect={(notes) => {
+              if (notes.length) setPicked(null);
+              setChosen(notes);
+            }}
+            onPaste={pasteAt}
             edge={(index) => (structure ? edgeRange(score, index) : null)}
             onEdge={(index, by) => {
               preview.stop();

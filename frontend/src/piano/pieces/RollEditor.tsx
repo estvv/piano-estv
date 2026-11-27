@@ -8,6 +8,7 @@ import { locate, offsetsOf, type Placed } from './roll';
 // Where keys are laid: time goes up from the keyboard, as the notes will fall,
 // all the parts one after the other.
 // Click an empty place for a note, drag up to hold it; click a note to pick it.
+// Shift+drag (or any drag while selecting) draws a box around several notes.
 // Notes of an imported piece may be between two columns.
 
 const BEAT = 76; // px
@@ -27,13 +28,15 @@ type Drag =
   | { kind: 'new'; y: number; moved: boolean; to: Placed }
   // Where a part starts, in beats from where it did.
   | { kind: 'edge'; y: number; moved: boolean; index: number; by: number }
+  // A box around notes, in px within the sheet (y from the bottom).
+  | { kind: 'box'; x0: number; y0: number; x: number; y: number; moved: boolean; add: boolean }
   | { kind: 'move' | 'size'; x: number; y: number; moved: boolean; from: Placed; to: Placed; held: number };
 
 export const otherHand = (hand: Hand): Hand => (hand === 'left' ? 'right' : 'left');
 const sameNote = (a: ScoreNote, b: ScoreNote) => a.hand === b.hand && a.step === b.step && a.midi === b.midi;
 export const samePlace = (a: Placed | null, b: Placed) => !!a && a.index === b.index && sameNote(a.note, b.note);
 
-export function RollEditor({ parts, division, from, to, hand, length, extend, cursor, playhead, picked, shown, edge, onEdge, onGo, onSeen, onPick, onAdd, onChange, onRemove }: {
+export function RollEditor({ parts, division, from, to, hand, length, extend, cursor, playhead, picked, shown, selecting, selection, pasting, onSelect, onPaste, edge, onEdge, onGo, onSeen, onPick, onAdd, onChange, onRemove }: {
   // In the order they are played: the same one may come back.
   parts: ScorePart[];
   division: Score['division'];
@@ -49,6 +52,14 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
   // In columns from the start of the piece; null: not playing.
   playhead: number | null;
   picked: Placed | null;
+  // A drag draws a box instead of a note.
+  selecting: boolean;
+  selection: Placed[];
+  // Notes following the pointer, dropped where clicked; null: none.
+  pasting: ((at: number) => Placed[]) | null;
+  onSelect(notes: Placed[]): void;
+  // Columns from the start of the piece, where the first note goes.
+  onPaste(at: number): void;
   // The part to go to, every time `times` changes.
   shown: { index: number; times: number };
   // How far the start of a part can be moved, in beats; null: it cannot.
@@ -66,6 +77,9 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
   const scroller = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  // Where pasted notes would start, in columns.
+  const [hover, setHover] = useState<number | null>(null);
+  useEffect(() => setHover(null), [pasting]);
   const [height, setHeight] = useState(0);
   // What is seen, in beats, every few of them.
   const [view, setView] = useState(0);
@@ -123,8 +137,24 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
   const hear = (midi: number) => void ensureAudio().then(() => playNote(midi, 0.35)).catch(() => {});
   const inside = (at: number) => Math.max(0, extend ? Math.min(at, columns + blank - 1) : Math.min(at, columns - 1));
 
+  const local = (clientX: number, clientY: number) => {
+    const r = sheet.current!.getBoundingClientRect();
+    return { x: clientX - r.left, y: r.bottom - clientY };
+  };
   const downEmpty = (e: PointerEvent) => {
     if (e.button !== 0) return;
+    if (pasting) {
+      const at = Math.max(0, placeAt(e.clientX, e.clientY).at);
+      setHover(null);
+      return onPaste(at);
+    }
+    if (selecting || e.shiftKey) {
+      const { x, y } = local(e.clientX, e.clientY);
+      sheet.current!.setPointerCapture(e.pointerId);
+      return setDrag({ kind: 'box', x0: x, y0: y, x, y, moved: false, add: e.shiftKey || e.ctrlKey || e.metaKey });
+    }
+    // A click beside them lets go of the notes picked, as of the one picked.
+    if (selection.length) return onSelect([]);
     const { midi, at } = placeAt(e.clientX, e.clientY);
     if (midi === null || (!extend && at >= columns)) return;
     const { index, step: s } = locate(offsets, at);
@@ -134,7 +164,15 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
   };
   const downNote = (e: PointerEvent, at: Placed, kind: 'move' | 'size') => {
     if (e.button !== 0) return;
+    if (pasting) return;
     e.stopPropagation();
+    // One more or one less in the selection.
+    if (kind === 'move' && (selecting || e.shiftKey || e.ctrlKey || e.metaKey)) {
+      hear(at.note.midi);
+      const without = selection.filter((p) => !(p.index === at.index && sameNote(p.note, at.note)));
+      return onSelect(without.length < selection.length ? without : [...selection, at]);
+    }
+    if (selection.length) onSelect([]);
     sheet.current!.setPointerCapture(e.pointerId);
     setDrag({ kind, x: e.clientX, y: e.clientY, moved: false, from: at, to: at, held: stepsHeld(parts[at.index], division, at.note) });
   };
@@ -145,7 +183,12 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
     setDrag({ kind: 'edge', y: e.clientY, moved: false, index, by: 0 });
   };
   const move = (e: PointerEvent) => {
+    if (pasting && e.pointerType === 'mouse') setHover(Math.max(0, placeAt(e.clientX, e.clientY).at));
     if (!drag) return;
+    if (drag.kind === 'box') {
+      const { x, y } = local(e.clientX, e.clientY);
+      return setDrag({ ...drag, x, y, moved: drag.moved || Math.hypot(x - drag.x0, y - drag.y0) > CLICK });
+    }
     if (drag.kind === 'edge') {
       const range = edge(drag.index);
       if (!range || (!drag.moved && Math.abs(e.clientY - drag.y) <= CLICK)) return;
@@ -170,6 +213,12 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
   const up = () => {
     if (!drag) return;
     setDrag(null);
+    if (drag.kind === 'box') {
+      if (!drag.moved) return drag.add ? undefined : onSelect([]);
+      const inBox = boxed(drag);
+      if (inBox.length) onPick(null);
+      return onSelect(drag.add ? [...selection, ...inBox.filter((a) => !selection.some((p) => p.index === a.index && sameNote(p.note, a.note)))] : inBox);
+    }
     if (drag.kind === 'edge') {
       if (!drag.moved) onGo(drag.index);
       else if (drag.by) onEdge(drag.index, drag.by);
@@ -197,6 +246,21 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
       bottom: (offsets[index] + note.step) * step + 1, height: Math.max(MIN_HEIGHT, stepsHeld(parts[index], division, note) * step - 2),
     };
   };
+  // Every note the box touches, seen or not.
+  const boxed = (b: Extract<Drag, { kind: 'box' }>): Placed[] => {
+    const width = sheet.current!.getBoundingClientRect().width;
+    const [left, right] = [Math.min(b.x0, b.x) / width, Math.max(b.x0, b.x) / width];
+    const [bottom, top] = [Math.min(b.y0, b.y), Math.max(b.y0, b.y)];
+    return parts.flatMap((p, index) => p.notes.flatMap((note) => {
+      const k = layout.get(note.midi);
+      if (!k) return [];
+      const start = (offsets[index] + note.step) * step;
+      const end = start + Math.max(MIN_HEIGHT, stepsHeld(p, division, note) * step);
+      return k.x < right && k.x + k.width > left && start < top && end > bottom ? [{ index, note }] : [];
+    }));
+  };
+  const selected = (at: Placed) => selection.some((p) => p.index === at.index && sameNote(p.note, at.note));
+  const ghosts = pasting && hover !== null ? pasting(hover) : [];
   const number = ({ index, note }: Placed) => parts[index].keys.find((k) => k.hand === note.hand && k.midi === note.midi)?.number;
 
   const low = Math.max(0, view - AROUND) * division;
@@ -223,7 +287,7 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={() => setDrag(null)}
-        className="relative w-full shrink-0 cursor-crosshair touch-pan-y select-none overflow-hidden"
+        className={`relative w-full shrink-0 select-none overflow-hidden ${pasting ? 'cursor-copy' : 'cursor-crosshair'} ${selecting || pasting ? 'touch-none' : 'touch-pan-y'}`}
         style={{ height: total }}
       >
         {[...layout].filter(([, b]) => b.black).map(([m, b]) => (
@@ -249,6 +313,7 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
           const b = box(drawn);
           if (!b) return null;
           const on = samePlace(picked, at);
+          const chosen = !on && selected(at);
           const { hand: own } = at.note;
           const other = otherHand(own);
           const toOther = `Passer à la main ${other === 'left' ? 'gauche' : 'droite'}`;
@@ -256,7 +321,7 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
             <div
               key={id}
               onPointerDown={(e) => downNote(e, at, 'move')}
-              className={`absolute flex touch-none items-end justify-center rounded-md pb-0.5 text-sm font-bold leading-none ${on ? `z-10 ${LOOK[own].picked}` : LOOK[own].note}`}
+              className={`absolute flex touch-none items-end justify-center rounded-md pb-0.5 text-sm font-bold leading-none ${on ? `z-10 ${LOOK[own].picked}` : chosen ? `z-10 ${LOOK[own].picked} ring-neutral-900` : LOOK[own].note}`}
               style={b}
             >
               {number(drawn)}
@@ -312,6 +377,16 @@ export function RollEditor({ parts, division, from, to, hand, length, extend, cu
               </button>
             </div>
           );
+        })}
+        {drag?.kind === 'box' && drag.moved && (
+          <div
+            className="pointer-events-none absolute z-30 rounded-sm border border-neutral-900/60 bg-neutral-900/10"
+            style={{ left: Math.min(drag.x0, drag.x), width: Math.abs(drag.x - drag.x0), bottom: Math.min(drag.y0, drag.y), height: Math.abs(drag.y - drag.y0) }}
+          />
+        )}
+        {ghosts.map((g, i) => {
+          const b = box(g);
+          return b && <div key={i} className={`pointer-events-none absolute z-20 rounded-md opacity-60 ring-2 ring-neutral-900 ${LOOK[g.note.hand].note}`} style={b} />;
         })}
         {draft && <div className={`pointer-events-none absolute rounded-md opacity-70 ${LOOK[hand].note}`} style={draft} />}
         {playhead !== null && <div className="pointer-events-none absolute inset-x-0 z-20 h-0.5 bg-neutral-900" style={{ bottom: playhead * step }} />}
